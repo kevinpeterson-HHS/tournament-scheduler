@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Round Robin Tournament Scheduler</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function App() {
+            const [schedules, setSchedules] = useState([]);
+            const [currentId, setCurrentId] = useState(null);
+            const [showSettings, setShowSettings] = useState(false);
+            const [editing, setEditing] = useState(false);
+            const [nextId, setNextId] = useState(1);
+
+            useEffect(() => {
+                const saved = localStorage.getItem('schedules');
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    setSchedules(data.schedules);
+                    setNextId(data.nextId);
+                    setCurrentId(data.schedules[0]?.id || null);
+                } else {
+                    const def = {id: 1, title: 'Schedule 1', numTeams: 10, numCourts: 5, winners: {}, round: 0, view: 'schedule'};
+                    setSchedules([def]);
+                    setCurrentId(1);
+                    setNextId(2);
+                }
+            }, []);
+
+            useEffect(() => {
+                if (schedules.length > 0) {
+                    localStorage.setItem('schedules', JSON.stringify({schedules, nextId}));
+                }
+            }, [schedules, nextId]);
+
+            const curr = schedules.find(s => s.id === currentId);
+            if (!curr) return null;
+
+            const update = (u) => setSchedules(schedules.map(s => s.id === currentId ? {...s, ...u} : s));
+
+            const genSchedule = (nt, nc) => {
+                const teams = Array.from({length: nt}, (_, i) => `Team ${i+1}`);
+                const courts = Array.from({length: nc}, (_, i) => `Court ${i+1}`);
+                let t = [...teams];
+                if (t.length % 2 !== 0) t.push('BYE');
+                const sched = [];
+                for (let r = 0; r < t.length - 1; r++) {
+                    const m = [];
+                    for (let i = 0; i < t.length/2; i++) {
+                        if (t[i] !== 'BYE' && t[t.length-1-i] !== 'BYE') {
+                            m.push({home: t[i], away: t[t.length-1-i], court: courts[m.length % nc]});
+                        }
+                    }
+                    if (m.length > 0) sched.push(m);
+                    const f = t[0], rot = t.slice(1);
+                    rot.push(rot.shift());
+                    t = [f, ...rot];
+                }
+                return sched;
+            };
+
+            const schedule = genSchedule(curr.numTeams, curr.numCourts);
+
+            const calcStandings = () => {
+                const st = {};
+                for (let i = 1; i <= curr.numTeams; i++) st[`Team ${i}`] = {wins: 0, losses: 0, played: 0};
+                schedule.forEach((round, ri) => {
+                    round.forEach((m, mi) => {
+                        const w = curr.winners[`${ri}-${mi}`];
+                        if (w) {
+                            st[w].wins++; st[w].played++;
+                            const l = w === m.home ? m.away : m.home;
+                            st[l].losses++; st[l].played++;
+                        }
+                    });
+                });
+                return Object.entries(st).map(([t, s]) => ({team: t, ...s})).sort((a,b) => b.wins - a.wins);
+            };
+
+            const standings = calcStandings();
+
+            const downloadJSON = () => {
+                const blob = new Blob([JSON.stringify({schedules, nextId}, null, 2)], {type: 'application/json'});
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `schedules-${new Date().toISOString().split('T')[0]}.json`;
+                a.click();
+            };
+
+            const exportText = () => {
+                let txt = `SCHEDULES - ${new Date().toLocaleString()}\n\n`;
+                schedules.forEach(s => {
+                    const sc = genSchedule(s.numTeams, s.numCourts);
+                    txt += `${s.title}\n${'='.repeat(50)}\n`;
+                    sc.forEach((r, ri) => {
+                        txt += `Round ${ri+1}:\n`;
+                        r.forEach((m, mi) => {
+                            const w = s.winners[`${ri}-${mi}`];
+                            txt += `  ${m.court}: ${m.home} vs ${m.away}${w ? ` ✓${w}` : ''}\n`;
+                        });
+                    });
+                    txt += '\n';
+                });
+                const blob = new Blob([txt], {type: 'text/plain'});
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `schedules-${new Date().toISOString().split('T')[0]}.txt`;
+                a.click();
+            };
+
+            const importJSON = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const data = JSON.parse(ev.target.result);
+                        setSchedules(data.schedules);
+                        setNextId(data.nextId);
+                        setCurrentId(data.schedules[0].id);
+                        alert('Imported!');
+                    } catch (err) {
+                        alert('Error: ' + err.message);
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 sm:p-8">
+                    <div className="max-w-6xl mx-auto bg-white rounded-lg shadow-xl p-4 sm:p-8">
+                        <div className="mb-4 flex gap-2 flex-wrap">
+                            <button onClick={downloadJSON} className="px-3 py-1 bg-blue-600 text-white rounded text-sm">Download JSON</button>
+                            <button onClick={exportText} className="px-3 py-1 bg-indigo-600 text-white rounded text-sm">Export Text</button>
+                            <label className="px-3 py-1 bg-gray-600 text-white rounded text-sm cursor-pointer">
+                                Import <input type="file" accept=".json" onChange={importJSON} className="hidden"/>
+                            </label>
+                        </div>
+
+                        <div className="mb-4 flex gap-2 overflow-x-auto pb-2 border-b">
+                            {schedules.map(s => (
+                                <div key={s.id} className="flex gap-1">
+                                    <button onClick={() => setCurrentId(s.id)} className={`px-3 py-1 rounded ${currentId === s.id ? 'bg-indigo-600 text-white' : 'bg-gray-200'}`}>
+                                        {s.title}
+                                    </button>
+                                    {schedules.length > 1 && (
+                                        <button onClick={() => {
+                                            const n = schedules.filter(x => x.id !== s.id);
+                                            setSchedules(n);
+                                            if (currentId === s.id) setCurrentId(n[0].id);
+                                        }} className="text-red-500 px-1">×</button>
+                                    )}
+                                </div>
+                            ))}
+                            <button onClick={() => {
+                                const n = {id: nextId, title: `Schedule ${nextId}`, numTeams: 10, numCourts: 5, winners: {}, round: 0, view: 'schedule'};
+                                setSchedules([...schedules, n]);
+                                setCurrentId(nextId);
+                                setNextId(nextId + 1);
+                            }} className="px-3 py-1 bg-green-500 text-white rounded text-sm">+ New</button>
+                        </div>
+
+                        {editing ? (
+                            <input value={curr.title} onChange={e => update({title: e.target.value})} onBlur={() => setEditing(false)} className="text-2xl font-bold mb-4 border-b-2" autoFocus/>
+                        ) : (
+                            <h1 onClick={() => setEditing(true)} className="text-2xl font-bold mb-4 cursor-pointer">{curr.title}</h1>
+                        )}
+
+                        <button onClick={() => setShowSettings(!showSettings)} className="mb-4 px-3 py-1 bg-gray-200 rounded">Settings</button>
+
+                        {showSettings && (
+                            <div className="mb-4 p-4 bg-gray-50 rounded">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-sm mb-1">Teams</label>
+                                        <select value={curr.numTeams} onChange={e => update({numTeams: parseInt(e.target.value), winners: {}})} className="w-full p-2 border rounded">
+                                            {[4,6,8,10,12,14,16,18,20].map(n => <option key={n} value={n}>{n}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm mb-1">Courts</label>
+                                        <select value={curr.numCourts} onChange={e => update({numCourts: parseInt(e.target.value), winners: {}})} className="w-full p-2 border rounded">
+                                            {[1,2,3,4,5,6,7,8,9,10].map(n => <option key={n} value={n}>{n}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="flex gap-2 mb-4">
+                            <button onClick={() => update({view: 'schedule'})} className={`px-4 py-2 rounded ${curr.view === 'schedule' ? 'bg-indigo-600 text-white' : 'bg-gray-200'}`}>Schedule</button>
+                            <button onClick={() => update({view: 'standings'})} className={`px-4 py-2 rounded ${curr.view === 'standings' ? 'bg-indigo-600 text-white' : 'bg-gray-200'}`}>Standings</button>
+                        </div>
+
+                        {curr.view === 'schedule' ? (
+                            <>
+                                <div className="flex gap-2 mb-4 flex-wrap">
+                                    {schedule.map((_, i) => (
+                                        <button key={i} onClick={() => update({round: i})} className={`px-3 py-1 rounded ${curr.round === i ? 'bg-indigo-600 text-white' : 'bg-gray-200'}`}>
+                                            R{i+1}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="space-y-3">
+                                    {schedule[curr.round]?.map((m, i) => {
+                                        const k = `${curr.round}-${i}`;
+                                        const w = curr.winners[k];
+                                        return (
+                                            <div key={i} className="bg-blue-50 p-3 rounded">
+                                                <div className="font-bold text-sm mb-2">{m.court}</div>
+                                                <div className="flex gap-2 items-center">
+                                                    <button onClick={() => update({winners: {...curr.winners, [k]: curr.winners[k] === m.home ? null : m.home}})}
+                                                        className={`flex-1 p-2 rounded ${w === m.home ? 'bg-green-500 text-white' : w === m.away ? 'bg-gray-300' : 'bg-white hover:bg-green-100'}`}>
+                                                        {m.home}
+                                                    </button>
+                                                    <span>vs</span>
+                                                    <button onClick={() => update({winners: {...curr.winners, [k]: curr.winners[k] === m.away ? null : m.away}})}
+                                                        className={`flex-1 p-2 rounded ${w === m.away ? 'bg-green-500 text-white' : w === m.home ? 'bg-gray-300' : 'bg-white hover:bg-green-100'}`}>
+                                                        {m.away}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full">
+                                    <thead className="bg-indigo-600 text-white">
+                                        <tr>
+                                            <th className="p-2 text-left">Rank</th>
+                                            <th className="p-2 text-left">Team</th>
+                                            <th className="p-2">Played</th>
+                                            <th className="p-2">Wins</th>
+                                            <th className="p-2">Losses</th>
+                                            <th className="p-2">Win %</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {standings.map((s, i) => (
+                                            <tr key={i} className={i % 2 === 0 ? 'bg-gray-50' : ''}>
+                                                <td className="p-2">{i+1}</td>
+                                                <td className="p-2 font-semibold">{s.team}</td>
+                                                <td className="p-2 text-center">{s.played}</td>
+                                                <td className="p-2 text-center">{s.wins}</td>
+                                                <td className="p-2 text-center">{s.losses}</td>
+                                                <td className="p-2 text-center">{s.played > 0 ? ((s.wins/s.played)*100).toFixed(1) : '0.0'}%</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
